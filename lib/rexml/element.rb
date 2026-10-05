@@ -5,6 +5,7 @@ require_relative "attribute"
 require_relative "cdata"
 require_relative "xpath"
 require_relative "parseexception"
+require_relative "element_move"
 
 module REXML
   # An \REXML::Element object represents an XML element.
@@ -721,6 +722,37 @@ module REXML
         el.attributes[key]=value
       end       if attrs.kind_of? Hash
       el
+    end
+
+    # :call-seq:
+    #   move_to(target) -> element
+    #
+    # Moves this element (and its whole subtree) to +target+, which may live
+    # in a different Document.  The element keeps its identity, attributes,
+    # text nodes, and namespace meaning.
+    #
+    # This is an explicit, validated move:
+    #
+    # * moving an element into itself or one of its own descendants is
+    #   rejected (it would create a cycle);
+    # * every attribute and text node must be owned by the subtree;
+    # * if a namespace prefix used by the subtree is bound to a different URI
+    #   at the target, a namespace declaration is added on the moved element
+    #   so the prefix keeps its source meaning.  The declaration only affects
+    #   the moved subtree; unrelated siblings in the target are untouched.
+    #
+    # If any check fails, REXML::ElementMove::InvalidMove is raised and
+    # neither document is modified.
+    #
+    #   doc_a = REXML::Document.new('<root xmlns:x="http://a"><x:foo/></root>')
+    #   doc_b = REXML::Document.new('<root xmlns:x="http://b"><sibling/></root>')
+    #   moved = doc_a.root.elements[1]
+    #   moved.move_to(doc_b.root.elements[1])
+    #   moved.namespace('x') # => "http://a"
+    #
+    # See REXML::ElementMove for the underlying plan and validation.
+    def move_to(target)
+      ElementMove.new(self, target).perform
     end
 
     # :call-seq:
