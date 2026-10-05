@@ -3,7 +3,7 @@ require_relative 'parseexception'
 module REXML
   class UndefinedNamespaceException < ParseException
     def initialize( prefix, source, parser )
-      super( "Undefined prefix #{prefix} found" )
+      super( "Undefined prefix #{prefix} found", source, parser )
     end
   end
 end

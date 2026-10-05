@@ -183,6 +183,18 @@ module REXML
 
       attr_reader :source
       attr_reader :entity_expansion_count
+
+      # Returns a snapshot of the namespace prefix => URI mappings that
+      # are in scope at the current parse position.  The default
+      # namespace, if any, is stored under the empty-string prefix "";
+      # unprefixed attributes are never bound to it.  The returned Hash
+      # is a copy made at call time: it is not shared with this parser
+      # (or any other parser), so mutating it does not affect parsing,
+      # and later parsing does not mutate it.  The snapshot is taken
+      # from the parser's live state; the source text is not re-parsed.
+      def namespaces
+        @namespaces.dup
+      end
       attr_writer :entity_expansion_limit
       attr_writer :entity_expansion_text_limit
 
@@ -445,7 +457,7 @@ module REXML
             # here explicitly.
             @source.ensure_buffer
             if @source.match?("/", true)
-              @namespaces_restore_stack.pop
+              pop_namespaces_restore
               last_tag = @tags.pop
               md = @source.match(Private::CLOSE_PATTERN, true)
               if md and !last_tag
@@ -875,7 +887,23 @@ module REXML
                   "(http://www.w3.org/TR/REC-xml-names/#ns-decl)"
                 raise REXML::ParseException.new( msg, @source, self)
               end
+              if value.empty?
+                # Namespaces in XML 1.0 only allows the default
+                # namespace to be (un)declared with an empty value;
+                # a prefixed namespace must not be bound to "".
+                msg = "The namespace URI for the '#{local_part}' prefix "+
+                  "must not be empty "+
+                  "(http://www.w3.org/TR/REC-xml-names/#ns-decl)"
+                raise REXML::ParseException.new( msg, @source, self )
+              end
               add_namespace(local_part, value)
+            elsif name == "xmlns"
+              # Default namespace declaration.  Per the XML namespace
+              # rules, an empty value (xmlns="") undeclares the default
+              # namespace.  The default namespace is recorded under the
+              # empty-string prefix so that it is never applied to
+              # unprefixed attributes.
+              add_namespace("", value.empty? ? nil : value)
             elsif prefix
               prefixes << prefix unless prefix == "xml"
             end

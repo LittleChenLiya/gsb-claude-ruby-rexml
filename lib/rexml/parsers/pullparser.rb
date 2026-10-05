@@ -68,7 +68,7 @@ module REXML
       def peek depth=0
         if @my_stack.length <= depth
           (depth - @my_stack.length + 1).times {
-            e = PullEvent.new(@parser.pull)
+            e = build_event
             @my_stack.push(e)
           }
         end
@@ -78,16 +78,7 @@ module REXML
       def pull
         return @my_stack.shift if @my_stack.length > 0
 
-        event = @parser.pull
-        case event[0]
-        when :entitydecl
-          @entities[ event[1] ] =
-            event[2] unless event[2] =~ /PUBLIC|SYSTEM/
-        when :text
-          unnormalized = @parser.unnormalize( event[1], @entities )
-          event << unnormalized
-        end
-        PullEvent.new( event )
+        build_event
       end
 
       def unshift token
@@ -96,6 +87,31 @@ module REXML
 
       def reset
         @parser.reset
+      end
+
+      private
+      def build_event
+        event = @parser.pull
+        case event[0]
+        when :entitydecl
+          @entities[ event[1] ] =
+            event[2] unless event[2] =~ /PUBLIC|SYSTEM/
+        when :text
+          unnormalized = @parser.unnormalize( event[1], @entities )
+          event << unnormalized
+        when :start_element, :end_element
+          # Attach an explicit snapshot of the namespace prefix => URI
+          # table that is really in effect for this event.  For
+          # :start_element the table includes the namespaces declared
+          # by the element itself; for :end_element the element's own
+          # declarations have already gone out of scope, so the table
+          # is the restored outer one.  The snapshot is a private copy
+          # taken from the parser's live state (the source text is not
+          # re-parsed), so events never share a mutable table with the
+          # parser or with each other.
+          event << @parser.namespaces
+        end
+        PullEvent.new( event )
       end
     end
 
@@ -130,12 +146,27 @@ module REXML
         @contents[0]
       end
 
-      # Content: [ String tag_name, Hash attributes ]
+      # For :start_element and :end_element events, returns the
+      # snapshot of the namespace prefix => URI mappings in effect for
+      # this event (the default namespace, if any, is keyed by "").
+      # The original prefixes and their URIs are preserved, and the
+      # returned Hash is a private copy that is not shared with the
+      # parser or with other events.  Returns nil for other events.
+      def namespaces
+        case @contents[0]
+        when :start_element
+          @contents[3]
+        when :end_element
+          @contents[2]
+        end
+      end
+
+      # Content: [ String tag_name, Hash attributes, Hash namespaces ]
       def start_element?
         @contents[0] == :start_element
       end
 
-      # Content: [ String tag_name ]
+      # Content: [ String tag_name, Hash namespaces ]
       def end_element?
         @contents[0] == :end_element
       end
