@@ -200,7 +200,17 @@ module REXML
         @entities = []
         @namespaces = {"xml" => Private::XML_PREFIXED_NAMESPACE}
         @namespaces_restore_stack = []
+        @event_namespaces = nil
       end
+
+      # The namespace prefix => URI mapping that was in effect for the
+      # most recently returned event.  This is only set for
+      # :start_element and :end_element events; it is +nil+ for any
+      # other event.  The returned Hash is a snapshot: it is not
+      # affected by later parsing, and it is not shared with other
+      # parsers.  The default namespace, when declared, is stored
+      # under the empty-string key +""+.
+      attr_reader :event_namespaces
 
       def position
         if @source.respond_to? :position
@@ -259,9 +269,11 @@ module REXML
       end
 
       def pull_event
+        @event_namespaces = nil
         if @closed
-          x, @closed = @closed, nil
-          return [ :end_element, x ]
+          (tag, namespaces), @closed = @closed, nil
+          @event_namespaces = namespaces
+          return [ :end_element, tag ]
         end
         if empty?
           if @document_status == :in_doctype
@@ -445,7 +457,11 @@ module REXML
             # here explicitly.
             @source.ensure_buffer
             if @source.match?("/", true)
-              @namespaces_restore_stack.pop
+              # The end tag still belongs to the scope of the element
+              # being closed, so snapshot the namespace table before
+              # restoring the enclosing scope.
+              namespaces = @namespaces.dup
+              pop_namespaces_restore
               last_tag = @tags.pop
               md = @source.match(Private::CLOSE_PATTERN, true)
               if md and !last_tag
@@ -458,6 +474,7 @@ module REXML
                 @source.position = start_position if md.nil?
                 raise REXML::ParseException.new(message, @source)
               end
+              @event_namespaces = namespaces
               return [ :end_element, last_tag ]
             elsif @source.match?("!", true)
               #STDERR.puts "SOURCE BUFFER = #{source.buffer}, #{source.buffer.size}"
@@ -496,13 +513,15 @@ module REXML
               end
 
               if closed
-                @closed = tag
+                @event_namespaces = @namespaces.dup
+                @closed = [tag, @event_namespaces]
                 pop_namespaces_restore
               else
                 if @tags.empty? and @have_root
                   raise ParseException.new("Malformed XML: Extra tag at the end of the document (got '<#{tag}')", @source)
                 end
                 @tags.push( tag )
+                @event_namespaces = @namespaces.dup
               end
               @have_root = true
               return [ :start_element, tag, attributes ]
@@ -636,6 +655,7 @@ module REXML
 
       def pop_namespaces_restore
         namespaces_restore = @namespaces_restore_stack.pop
+        return if namespaces_restore.nil?
         namespaces_restore.each do |prefix, uri|
           if uri.nil?
             @namespaces.delete(prefix)
@@ -875,7 +895,18 @@ module REXML
                   "(http://www.w3.org/TR/REC-xml-names/#ns-decl)"
                 raise REXML::ParseException.new( msg, @source, self)
               end
+              if value.empty?
+                msg = "The namespace URI for the '#{local_part}' prefix "+
+                  "must not be empty "+
+                  "(http://www.w3.org/TR/REC-xml-names/#ns-decl)"
+                raise REXML::ParseException.new( msg, @source, self )
+              end
               add_namespace(local_part, value)
+            elsif prefix.nil? and local_part == "xmlns"
+              # Default namespace declaration.  An empty value unbinds
+              # the default namespace; it never applies to attributes.
+              # (http://www.w3.org/TR/REC-xml-names/#ns-decl)
+              add_namespace("", value.empty? ? nil : value)
             elsif prefix
               prefixes << prefix unless prefix == "xml"
             end

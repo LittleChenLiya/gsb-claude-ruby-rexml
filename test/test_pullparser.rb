@@ -189,6 +189,170 @@ module REXMLTests
       )
     end
 
+    class NamespaceTest < Test::Unit::TestCase
+      # Three-level XML: root > mid > leaf, plus a sibling of mid.
+      # The "p" prefix is rebound at the middle level, and a default
+      # namespace is declared at the root.
+      THREE_LEVEL_XML = <<-XML
+<root xmlns:p="outer" xmlns="default0">
+  <mid xmlns:p="middle">
+    <leaf p:a="1" plain="2"/>
+  </mid>
+  <sibling p:b="3"/>
+</root>
+      XML
+
+      XML_NAMESPACE = "http://www.w3.org/XML/1998/namespace"
+
+      def collect_element_events(xml)
+        parser = REXML::Parsers::PullParser.new(xml)
+        events = []
+        while parser.has_next?
+          event = parser.pull
+          next unless event.start_element? or event.end_element?
+          events << event
+        end
+        events
+      end
+
+      def test_start_and_end_events_carry_effective_namespaces
+        events = collect_element_events(THREE_LEVEL_XML)
+        snapshots = events.map {|event| [event.event_type, event[0], event.namespaces]}
+
+        root_start, mid_start, leaf_start, leaf_end, mid_end,
+          sibling_start, sibling_end, root_end = snapshots
+
+        # Each start event sees the table really in effect, including
+        # the declarations made by the element itself.
+        assert_equal(:start_element, root_start[0])
+        assert_equal("outer", root_start[2]["p"])
+        assert_equal("default0", root_start[2][""])
+        assert_equal(XML_NAMESPACE, root_start[2]["xml"])
+
+        # Inner rebinding: mid and its descendants see the inner URI.
+        assert_equal("middle", mid_start[2]["p"])
+        assert_equal("middle", leaf_start[2]["p"])
+
+        # An end event still sees the scope of the element being closed.
+        assert_equal([:end_element, "leaf"], leaf_end[0, 2])
+        assert_equal("middle", leaf_end[2]["p"])
+        assert_equal([:end_element, "mid"], mid_end[0, 2])
+        assert_equal("middle", mid_end[2]["p"])
+
+        # Exiting the element restores the outer binding: the sibling
+        # (and its prefixed attribute) use the outer URI again.
+        assert_equal([:start_element, "sibling"], sibling_start[0, 2])
+        assert_equal("outer", sibling_start[2]["p"])
+        assert_equal("outer", sibling_end[2]["p"])
+        assert_equal("outer", root_end[2]["p"])
+      end
+
+      def test_keeps_uri_and_original_prefix
+        events = collect_element_events(THREE_LEVEL_XML)
+        leaf = events.find {|event| event.start_element? and event[0] == "leaf"}
+        # The attributes keep their original prefixed names...
+        assert_equal(["p:a", "plain"], leaf[1].keys)
+        # ...and the snapshot keeps the original prefix => URI mapping.
+        assert_equal("middle", leaf.namespaces["p"])
+        assert_equal("middle", leaf.attribute_namespaces["p:a"])
+        sibling = events.find {|event| event.start_element? and event[0] == "sibling"}
+        assert_equal("outer", sibling.attribute_namespaces["p:b"])
+      end
+
+      def test_default_namespace_does_not_apply_to_attributes
+        events = collect_element_events(THREE_LEVEL_XML)
+        leaf = events.find {|event| event.start_element? and event[0] == "leaf"}
+        # The default namespace applies to the element itself...
+        assert_equal("default0", leaf.namespace)
+        # ...but never to attributes: an unprefixed attribute has no
+        # namespace even while a default namespace is in scope.
+        assert_nil(leaf.attribute_namespaces["plain"])
+        assert(leaf.attribute_namespaces.key?("plain"))
+        # Namespace declarations themselves have no namespace either.
+        root = events.find {|event| event.start_element? and event[0] == "root"}
+        assert_nil(root.attribute_namespaces["xmlns"])
+        assert_nil(root.attribute_namespaces["xmlns:p"])
+      end
+
+      def test_inner_rebinding_does_not_leak_to_siblings
+        xml = '<root><a xmlns:q="inner-uri"/><b q:x="1"/></root>'
+        parser = REXML::Parsers::PullParser.new(xml)
+        assert_raise(REXML::UndefinedNamespaceException) do
+          parser.pull while parser.has_next?
+        end
+      end
+
+      def test_undeclared_prefix_is_rejected_with_position
+        xml = "<root>\n  <a>\n    <b q:x=\"1\"/>\n  </a>\n</root>"
+        parser = REXML::Parsers::PullParser.new(xml)
+        exception = assert_raise(REXML::UndefinedNamespaceException) do
+          parser.pull while parser.has_next?
+        end
+        assert_match(/\AUndefined prefix q found/, exception.message)
+        # The position is reported from the parser's current state,
+        # without re-parsing the original text.
+        assert_equal(3, exception.line)
+        assert_equal(29, exception.position)
+        assert_match(/^Line: 3$/, exception.to_s)
+        assert_match(/^Position: 29$/, exception.to_s)
+      end
+
+      def test_empty_default_namespace_binding_unbinds
+        xml = '<root xmlns="d"><child xmlns=""><leaf/></child></root>'
+        events = collect_element_events(xml)
+        root, child, leaf, = events.select(&:start_element?)
+        assert_equal("d", root.namespaces[""])
+        # xmlns="" removes the default namespace in the inner scope...
+        assert_false(child.namespaces.key?(""))
+        assert_false(leaf.namespaces.key?(""))
+        assert_nil(child.namespace)
+        assert_nil(leaf.namespace)
+        # ...and the outer default namespace is restored afterwards.
+        root_end = events.reverse.find {|event| event.end_element?}
+        assert_equal("d", root_end.namespaces[""])
+      end
+
+      def test_empty_prefixed_binding_is_rejected
+        # XML Namespaces 1.0: a prefix must not be bound to an empty URI.
+        parser = REXML::Parsers::PullParser.new('<root xmlns:p=""/>')
+        exception = assert_raise(REXML::ParseException) do
+          parser.pull while parser.has_next?
+        end
+        assert_match(/must not be empty/, exception.message)
+      end
+
+      def test_parsers_do_not_share_mutable_namespace_tables
+        xml = '<r xmlns:p="u1"><a/></r>'
+        parsers = 2.times.map { REXML::Parsers::PullParser.new(xml) }
+        firsts = parsers.map do |parser|
+          event = nil
+          event = parser.pull until event and event.start_element?
+          event
+        end
+        assert_false(firsts[0].namespaces.equal?(firsts[1].namespaces))
+
+        firsts[0].namespaces["p"] = "HACKED"
+        firsts[0].namespaces["evil"] = "HACKED"
+        # The other parser's snapshot is unaffected...
+        assert_equal("u1", firsts[1].namespaces["p"])
+        assert_false(firsts[1].namespaces.key?("evil"))
+        # ...and so are later snapshots of the same parser.
+        event = nil
+        event = parsers[0].pull until event and event.start_element?
+        assert_equal("u1", event.namespaces["p"])
+        assert_false(event.namespaces.key?("evil"))
+      end
+
+      def test_peek_carries_namespaces
+        parser = REXML::Parsers::PullParser.new('<a xmlns:p="u"><b/></a>')
+        event = nil
+        event = parser.pull until event and event.start_element?
+        peeked = parser.peek
+        assert(peeked.start_element?)
+        assert_equal("u", peeked.namespaces["p"])
+      end
+    end
+
     class EntityExpansionLimitTest < Test::Unit::TestCase
       class GeneralEntityTest < self
         def test_have_value

@@ -68,7 +68,7 @@ module REXML
       def peek depth=0
         if @my_stack.length <= depth
           (depth - @my_stack.length + 1).times {
-            e = PullEvent.new(@parser.pull)
+            e = PullEvent.new(@parser.pull, @parser.event_namespaces)
             @my_stack.push(e)
           }
         end
@@ -79,6 +79,7 @@ module REXML
         return @my_stack.shift if @my_stack.length > 0
 
         event = @parser.pull
+        namespaces = @parser.event_namespaces
         case event[0]
         when :entitydecl
           @entities[ event[1] ] =
@@ -87,7 +88,7 @@ module REXML
           unnormalized = @parser.unnormalize( event[1], @entities )
           event << unnormalized
         end
-        PullEvent.new( event )
+        PullEvent.new( event, namespaces )
       end
 
       def unshift token
@@ -108,8 +109,63 @@ module REXML
       # The type of this event.  Will be one of :tag_start, :tag_end, :text,
       # :processing_instruction, :comment, :doctype, :attlistdecl, :entitydecl,
       # :notationdecl, :entity, :cdata, :xmldecl, or :error.
-      def initialize(arg)
+      def initialize(arg, namespaces=nil)
         @contents = arg
+        @namespaces = namespaces
+      end
+
+      # The namespace prefix => URI mapping in effect for this event.
+      #
+      # This is only set for :start_element and :end_element events, and
+      # is +nil+ for any other event.  Both the start and the end event
+      # of an element report the table that is really in effect for that
+      # element: a start event includes the namespaces declared by the
+      # element itself, and an end event still sees the scope of the
+      # element being closed (inner rebindings are only restored after
+      # the end event).
+      #
+      # The returned Hash is a snapshot taken when the event was
+      # generated; it is not affected by later parsing and is not shared
+      # with other parser instances.  The default namespace, when
+      # declared, is stored under the empty-string key +""+; the
+      # original prefixes are kept as the keys.
+      attr_reader :namespaces
+
+      # The namespace URI of the element itself, for :start_element and
+      # :end_element events.  The default namespace applies to elements,
+      # so an unprefixed element name is resolved against the +""
+      # binding.  Returns +nil+ when the element has no namespace or
+      # when this is not an element event.
+      def namespace
+        return nil unless start_element? or end_element?
+        table = @namespaces || {}
+        name = @contents[1]
+        prefix = name.include?(":") ? name.split(":", 2)[0] : ""
+        table[prefix]
+      end
+
+      # A Hash of attribute name => namespace URI for a :start_element
+      # event.  The original prefixed attribute names are kept as keys.
+      # Per the XML Namespaces specification, the default namespace does
+      # not apply to attributes, so attributes without a prefix always
+      # map to +nil+, even when a default namespace is in scope.
+      # Namespace declarations (xmlns and xmlns:*) also map to +nil+.
+      # Returns +nil+ when this is not a :start_element event.
+      def attribute_namespaces
+        return nil unless start_element?
+        table = @namespaces || {}
+        result = {}
+        (@contents[2] || {}).each_key do |name|
+          if name == "xmlns"
+            result[name] = nil
+          elsif name.include?(":")
+            prefix = name.split(":", 2)[0]
+            result[name] = (prefix == "xmlns") ? nil : table[prefix]
+          else
+            result[name] = nil
+          end
+        end
+        result
       end
 
       def []( start, endd=nil)
