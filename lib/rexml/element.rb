@@ -1482,6 +1482,29 @@ module REXML
       find_all { |child| child.kind_of? Text }.freeze
     end
 
+    # :call-seq:
+    #   entity_references -> array_of_text_segments
+    #
+    # Returns the raw entity-reference views (see Text#entity_references)
+    # of all text nodes in this element and, recursively, its
+    # subelements:
+    #
+    #   xml_string = '<root><a>x &amp; y</a><b>&e;</b></root>'
+    #   d = REXML::Document.new(xml_string)
+    #   d.root.entity_references.map {|s| [s.kind, s.source] }
+    #   # => [[:literal, "x "], [:literal, "&amp;"], [:literal, " y"],
+    #   #     [:entity, "&e;"]]
+    #
+    # Building the view never triggers entity resolution, and modifying
+    # the returned array does not change the document.
+    def entity_references
+      segments = []
+      XPath.each(self, ".//text()") do |text|
+        segments.concat(text.entity_references)
+      end
+      segments
+    end
+
     # == DEPRECATED
     # See REXML::Formatters
     #

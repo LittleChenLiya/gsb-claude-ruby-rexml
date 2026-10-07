@@ -436,6 +436,14 @@ module REXML
     attr_writer :entity_expansion_limit
     attr_accessor :entity_expansion_text_limit
 
+    # Returns the raw entity-reference views (see
+    # REXML::Text#entity_references) of all text nodes in this document.
+    # Building the view never triggers entity resolution, and modifying
+    # the returned array does not change the document.
+    def entity_references
+      root ? root.entity_references : []
+    end
+
     def record_entity_expansion
       @entity_expansion_count += 1
       if @entity_expansion_count > @entity_expansion_limit

@@ -204,6 +204,161 @@ module REXML
     end
 
     REFERENCE = /#{Entity::REFERENCE}/
+
+    # Values of the predefined entities, which simply stand for literal
+    # characters rather than for declared content.
+    PREDEFINED_ENTITY_VALUES = {
+      "amp" => "&",
+      "lt" => "<",
+      "gt" => ">",
+      "quot" => "\"",
+      "apos" => "'",
+    }.freeze
+
+    # A read-only view of one segment of a text node's content, as
+    # returned by Text#entity_references.
+    #
+    # A segment is either _literal_ character data or a general
+    # _entity_ reference:
+    #
+    # * A literal segment holds character data.  Predefined entity
+    #   references (+&amp;+, +&lt;+, +&gt;+, +&quot;+, +&apos;+) and
+    #   numeric character references are reported as literal segments,
+    #   because they stand for literal characters (such as a literal
+    #   +&+) rather than for declared content.
+    # * An entity segment holds a general entity reference such as
+    #   +&greeting;+.  The reference is kept as-is; the view never
+    #   expands it.  Use #resolved? to distinguish entities declared
+    #   in the document's doctype from unknown ones.
+    #
+    # Segments are immutable value objects, detached from the document:
+    # modifying them (or the array returned by Text#entity_references)
+    # never modifies the document.
+    class Segment
+      # The kind of this segment: +:literal+ for literal character data,
+      # +:entity+ for a general entity reference.
+      attr_reader :kind
+
+      # The raw source text of this segment, as it appears (or would
+      # appear) in the serialized document.  For example, a literal "&"
+      # character has source "&amp;", and an entity segment for the
+      # "greeting" entity has source "&greeting;".
+      attr_reader :source
+
+      # The entity name for entity segments ("greeting" for
+      # "&greeting;"); nil for literal segments.
+      attr_reader :name
+
+      def initialize(kind, source, value, name=nil, resolved=true) # :nodoc:
+        @kind = kind
+        @source = source.dup.freeze
+        @value = value.dup.freeze
+        @name = name&.dup&.freeze
+        @resolved = resolved
+        freeze
+      end
+
+      # Whether this segment is literal character data.
+      def literal?
+        @kind == :literal
+      end
+
+      # Whether this segment is a general entity reference.
+      def entity?
+        @kind == :entity
+      end
+
+      # Whether this segment's entity is declared in the document's
+      # doctype.  Always true for literal segments.  Unknown entities
+      # report false and keep their raw reference, mirroring how
+      # Text#value preserves undeclared entities.
+      def resolved?
+        @resolved
+      end
+
+      # The character data of this segment.  For literal segments this
+      # is the literal text (a literal "&" for source "&amp;").  For
+      # entity segments this is the raw reference itself, because the
+      # view never expands entities; use Text#value for the expanded
+      # result.
+      def to_s
+        @value
+      end
+
+      def ==(other)
+        other.kind_of?(Segment) and
+          @kind == other.kind and
+          @source == other.source and
+          @value == other.to_s and
+          @name == other.name and
+          @resolved == other.resolved?
+      end
+      alias eql? ==
+
+      def hash
+        [@kind, @source, @value, @name, @resolved].hash
+      end
+
+      def inspect
+        details = [@kind, @source]
+        details << "unresolved" if entity? and not @resolved
+        "\#<#{self.class.name} #{details.compact.join(' ').inspect}>"
+      end
+    end
+
+    # Returns the raw entity-reference view of this text node: an array
+    # of Text::Segment objects that splits the content of this node into
+    # literal character data and general entity references.
+    #
+    # The view distinguishes a literal +&+ (stored as the predefined
+    # entity +&amp;+) from real entity references:
+    #
+    #   # Assume that the entity "greeting" is declared as "Hello"
+    #   text = REXML::Document.new("<doc>a &amp; &greeting; &nosuch;</doc>").root.get_text
+    #   text.entity_references.map {|s| [s.kind, s.source] }
+    #   #-> [[:literal, "a "], [:literal, "&amp;"], [:literal, " "],
+    #   #    [:entity, "&greeting;"], [:literal, " "], [:entity, "&nosuch;"]]
+    #
+    # Building the view never triggers entity resolution: declared
+    # entities are looked up by name only, and unknown entities are kept
+    # as unresolved segments.  The expanded result is still available
+    # through the existing readers, Text#value and Text#to_s.
+    #
+    # The returned array is a new object on each call, and the segments
+    # are immutable; modifying the array does not change the document.
+    def entity_references
+      segments = []
+      source = to_s
+      offset = 0
+      source.scan(REFERENCE) do
+        match = Regexp.last_match
+        start = match.begin(0)
+        if start > offset
+          literal = source[offset...start]
+          segments << Segment.new(:literal, literal, literal)
+        end
+        reference = match[0]
+        name = match[1]
+        if name.nil? or PREDEFINED_ENTITY_VALUES.key?(name)
+          # A numeric character reference or a predefined entity: it
+          # stands for a literal character, not for declared content.
+          # Text.expand with no doctype resolves these statically,
+          # without recording any entity expansion.
+          segments << Segment.new(:literal, reference,
+                                  Text.expand(reference, nil, nil))
+        else
+          segments << Segment.new(:entity, reference, reference, name,
+                                  entity_declared?(name))
+        end
+        offset = match.end(0)
+      end
+      if offset < source.length
+        literal = source[offset..-1]
+        segments << Segment.new(:literal, literal, literal)
+      end
+      segments
+    end
+
     # Returns the string value of this text node.  This string is always
     # escaped, meaning that it is a valid XML text node string, and all
     # entities that can be escaped, have been inserted.  This method respects
@@ -328,6 +483,14 @@ module REXML
     end
 
     private
+    # Whether the doctype of this node's document declares a general
+    # entity named +name+.  This only checks for the existence of the
+    # declaration; it never expands the entity.
+    def entity_declared?(name)
+      dtd = doctype
+      not dtd.nil? and dtd.entities.key?(name)
+    end
+
     def clear_cache
       @normalized = nil
       @unnormalized = nil
