@@ -2,6 +2,7 @@
 require_relative "parseexception"
 require_relative "formatters/pretty"
 require_relative "formatters/default"
+require_relative "formatters/strict"
 
 module REXML
   # Represents a node in the tree.  Nodes are never encountered except as
