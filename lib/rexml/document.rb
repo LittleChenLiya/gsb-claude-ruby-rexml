@@ -383,6 +383,8 @@ module REXML
       ie_hack    = false if ie_hack.nil?
       encoding ||= xml_decl.encoding
 
+      check_xml_characters
+
       if encoding != 'UTF-8' && !output.kind_of?(Output)
         output = Output.new( output, encoding )
       end

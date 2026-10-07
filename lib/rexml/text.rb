@@ -40,6 +40,19 @@ module REXML
       }.join +
     ']*$').freeze
 
+    # Matches a single character that is not a valid XML character,
+    # anywhere in the string (including after newlines).
+    INVALID_XML_CHAR = Regexp.new('[^'+
+      VALID_CHAR.map { |item|
+        case item
+        when Integer
+          [item].pack('U').force_encoding('utf-8')
+        when Range
+          [item.first, '-'.ord, item.last].pack('UUU').force_encoding('utf-8')
+        end
+      }.join +
+    ']').freeze
+
     # Constructor
     # +arg+ if a String, the content is set to the String.  If a Text,
     # the object is shallowly cloned.
@@ -165,6 +178,16 @@ module REXML
       end
 
       string
+    end
+
+    # Returns the first character of +string+ that is not a valid XML
+    # character, or nil if there is none.  This is the code point level
+    # check used by the strict serialization precheck: legal tab,
+    # newline and carriage return characters are accepted here and are
+    # left to the node-specific escaping rules, and already-escaped
+    # entities are not re-examined.
+    def Text.invalid_xml_character(string)
+      string[INVALID_XML_CHAR]
     end
 
     def node_type

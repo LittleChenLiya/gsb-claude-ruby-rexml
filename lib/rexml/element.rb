@@ -1506,6 +1506,7 @@ module REXML
     #  doc.write( $stdout ) #-> doc written to the console
     def write(output=$stdout, indent=-1, transitive=false, ie_hack=false)
       Kernel.warn("#{self.class.name}#write is deprecated.  See REXML::Formatters", uplevel: 1)
+      check_xml_characters
       formatter = if indent > -1
           if transitive
             require_relative "formatters/transitive"
@@ -1544,6 +1545,38 @@ module REXML
     end
 
     private
+
+    # Strict serialization precheck.  Walks this subtree and raises
+    # before anything is written if a Text node or an attribute holds a
+    # character that is not a valid XML character.  The raised message
+    # reports the XPath of the offending node and the code point of the
+    # character.  Legal tab and newline characters are left to the
+    # node-specific escaping rules, and already-escaped entities are not
+    # re-escaped.
+    def check_xml_characters
+      stack = [self]
+      until stack.empty?
+        node = stack.pop
+        node.attributes.each_attribute do |attribute|
+          check_xml_character_string(attribute.to_s, attribute)
+        end
+        node.children.each do |child|
+          case child.node_type
+          when :element
+            stack << child
+          when :text
+            check_xml_character_string(child.to_s, child)
+          end
+        end
+      end
+    end
+
+    def check_xml_character_string(string, node)
+      char = Text.invalid_xml_character(string)
+      return if char.nil?
+      raise "Illegal XML character U+#{"%04X" % char.ord} " \
+            "in serialization of #{node.xpath}"
+    end
 
     def __to_xpath_helper node
       rv = node.expanded_name.clone

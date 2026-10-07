@@ -25,6 +25,9 @@ module REXML
     #   *DEPRECATED* This parameter is now ignored.  See the formatters in the
     #   REXML::Formatters package for changing the output style.
     def to_s indent=nil
+      # Strict serialization precheck: defined by Element (and thus
+      # Document); rejects illegal XML characters before any output.
+      check_xml_characters if respond_to?(:check_xml_characters, true)
       unless indent.nil?
         Kernel.warn( "#{self.class.name}#to_s(indent) parameter is deprecated", uplevel: 1)
         f = REXML::Formatters::Pretty.new( indent )
