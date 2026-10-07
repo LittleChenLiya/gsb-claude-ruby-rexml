@@ -1,5 +1,17 @@
 # News
 
+## Unreleased
+
+### Improvement
+
+  * Add `REXML::Text#entity_references`: a raw entity-reference view of
+    a text node. It reports literal character data and entity
+    references as separate frozen segments, resolves known references
+    to their raw declared replacement text without triggering entity
+    expansion (no `Document#entity_expansion_count` changes), and
+    preserves unknown entities with a diagnostic. The returned array
+    is a snapshot; modifying it does not change the document.
+
 ## 3.4.4 - 2025-09-10 {#version-3-4-4}
 
 ### Improvement

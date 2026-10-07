@@ -244,6 +244,62 @@ module REXML
                                           entity_expansion_text_limit: document&.entity_expansion_text_limit)
     end
 
+    # Returns a raw entity-reference view of this text node: an Array of
+    # frozen segment Hashes describing the stored (unexpanded) form of
+    # this text.  Literal character data and entity references are
+    # reported as separate segments, so a literal "&" that is character
+    # data can be told apart from an entity reference such as "&amp;"
+    # or "&name;".
+    #
+    # Each segment is a frozen Hash with the following keys:
+    # [+:kind+]       +:text+, +:entity+, or +:character_reference+
+    # [+:source+]     the raw source of the segment as stored in this
+    #                 node (e.g. <tt>"&amp;"</tt>)
+    # [+:value+]      for +:text+ segments, the same as +:source+; for
+    #                 known entity references, the raw replacement text
+    #                 declared for the entity (predefined entities
+    #                 resolve to their single character); +nil+ for
+    #                 unknown entities
+    # [+:name+]       the entity name for +:entity+ segments,
+    #                 +nil+ otherwise
+    # [+:known+]      whether the reference could be resolved locally
+    # [+:diagnostic+] a diagnostic message for references that could
+    #                 not be fully resolved (unknown or external
+    #                 entities), +nil+ otherwise
+    #
+    # Building the view never expands entities: it does not count
+    # against Document#entity_expansion_count nor the entity expansion
+    # limits, and nested entity references inside replacement text are
+    # left unexpanded.  Unknown entities are preserved as their raw
+    # reference together with a diagnostic.  Use #value for the fully
+    # expanded text.
+    #
+    # The returned Array and its segments are snapshots built on every
+    # call; modifying them does not change this text node or the
+    # document.
+    #
+    #   # Assume that the entity "s" is defined to be "sean"
+    #   t = Text.new( "< & &s;", false, nil, false )
+    #   t.entity_references
+    #   #-> [{kind: :text, source: "< & ", ...},
+    #   #    {kind: :entity, source: "&s;", name: "s", value: "sean", ...}]
+    def entity_references
+      segments = []
+      offset = 0
+      @string.scan(REFERENCE) do
+        match = Regexp.last_match
+        if match.begin(0) > offset
+          segments << entity_reference_text_segment(@string[offset...match.begin(0)])
+        end
+        segments << entity_reference_segment(match[0])
+        offset = match.end(0)
+      end
+      if offset < @string.length
+        segments << entity_reference_text_segment(@string[offset..-1])
+      end
+      segments
+    end
+
     # Sets the contents of this text node.  This expects the text to be
     # unnormalized.  It returns self.
     #
@@ -331,6 +387,82 @@ module REXML
     def clear_cache
       @normalized = nil
       @unnormalized = nil
+    end
+
+    # Builds a frozen +:text+ segment for #entity_references.  The
+    # source is duplicated and frozen so the segment is a snapshot that
+    # cannot affect this node.
+    def entity_reference_text_segment(source)
+      source = source.dup.freeze
+      {
+        kind: :text,
+        source: source,
+        value: source,
+        name: nil,
+        known: true,
+        diagnostic: nil,
+      }.freeze
+    end
+
+    # Builds a frozen reference segment for #entity_references.
+    # Resolving the reference only looks up the raw declared replacement
+    # text; it never calls Entity#unnormalize, so no entity expansion is
+    # recorded and nested references are left intact.
+    def entity_reference_segment(reference)
+      if reference[1] == "#"
+        # Numeric character references are decoded locally without
+        # touching the doctype, so no entity resolution is triggered.
+        return {
+          kind: :character_reference,
+          source: reference.dup.freeze,
+          value: Text.expand(reference, nil, nil).freeze,
+          name: nil,
+          known: true,
+          diagnostic: nil,
+        }.freeze
+      end
+
+      name = reference[1...-1].dup.freeze
+      # "amp" is deliberately absent from DocType::DEFAULT_ENTITIES and
+      # is special-cased by Text.expand; mirror that here so the
+      # predefined "&amp;" reference resolves to a literal "&".
+      if name == "amp"
+        return {
+          kind: :entity,
+          source: reference.dup.freeze,
+          value: "&".freeze,
+          name: name,
+          known: true,
+          diagnostic: nil,
+        }.freeze
+      end
+
+      entities = doctype ? doctype.entities : DocType::DEFAULT_ENTITIES
+      entity = entities[name]
+      if entity.nil?
+        return {
+          kind: :entity,
+          source: reference.dup.freeze,
+          value: nil,
+          name: name,
+          known: false,
+          diagnostic: "undefined entity: &#{name};".freeze,
+        }.freeze
+      end
+
+      value = entity.value
+      diagnostic = nil
+      if value.nil?
+        diagnostic = "external entity: &#{name};"
+      end
+      {
+        kind: :entity,
+        source: reference.dup.freeze,
+        value: value&.dup&.freeze,
+        name: name,
+        known: true,
+        diagnostic: diagnostic&.freeze,
+      }.freeze
     end
 
     # Reads text, substituting entities
